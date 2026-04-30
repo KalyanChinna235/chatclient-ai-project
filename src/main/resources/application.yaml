@@ -7,8 +7,19 @@ spring:
       base-url: http://localhost:11434   #  correct port
       chat:
         options:
-          model: deepseek-coder-v2:latest         # or deepseek-coder-v2:latest
+          model: codellama:latest         # or deepseek-coder-v2:latest
           temperature: 0.7
 
+  datasource:
+    url: jdbc:mysql://localhost:3306/spring_ai
+    username: root
+    password: test
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+  sql:
+    init:
+      mode: always
 server:
   port: 8081

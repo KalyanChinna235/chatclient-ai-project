@@ -1,31 +1,22 @@
 package com.spring.ai.project.service.impl;
 
+import com.spring.ai.project.entity.PromptTemplate;
+import com.spring.ai.project.repo.PromptTemplateRepository;
 import org.springframework.stereotype.Service;
 
 @Service
 public class PromptTemplateService {
+    private final PromptTemplateRepository repository;
 
-    public String buildJavaProgramPrompt(String question) {
-        return """
-        You are a backend API.
+    public PromptTemplateService(PromptTemplateRepository repository) {
+        this.repository = repository;
+    }
 
-        Return ONLY valid JSON.
+    public String getTemplate(String name, String question) {
 
-        Format:
-        {
-          "title": "...",
-          "content": "...",
-          "description": "...",
-          "createdYear": "YYYY"
-        }
+        PromptTemplate template = repository.findByName(name)
+                .orElseThrow(() -> new RuntimeException("Template not found"));
 
-        Rules:
-        - Language must be Java
-        - Code must be complete and runnable
-        - Use Scanner if input required
-
-        Question:
-        %s
-        """.formatted(question);
+        return template.getTemplate().replace("{question}", question);
     }
 }
