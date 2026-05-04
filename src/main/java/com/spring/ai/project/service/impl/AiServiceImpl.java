@@ -3,9 +3,11 @@ package com.spring.ai.project.service.impl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.spring.ai.project.dto.RespnseStructure;
 import com.spring.ai.project.service.AiService;
+import com.spring.ai.project.service.CodeValidatorService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Year;
 
@@ -13,41 +15,71 @@ import java.time.Year;
 @Slf4j
 public class AiServiceImpl implements AiService {
 
-    private final ChatClient chatClient;
+    private final ChatClient chatClient; // PRIMARY (Ollama)
+    private final WebClient deepseekClient; // BACKUP (DeepSeek)
     private final PromptTemplateService templateService;
+    private final CodeValidatorService codeValidatorService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AiServiceImpl(ChatClient.Builder builder,
-                         PromptTemplateService templateService) {
+                         WebClient deepseekClient,
+                         PromptTemplateService templateService,
+                         CodeValidatorService codeValidatorService) {
+
         this.chatClient = builder.build();
+        this.deepseekClient = deepseekClient;
         this.templateService = templateService;
+        this.codeValidatorService = codeValidatorService;
     }
 
     @Override
     public RespnseStructure askToAi(String question) {
-        String basePrompt = templateService.getTemplate("JAVA_PROGRAM", question);
-        return executeWithRetry(basePrompt);
+
+        String type = detectType(question); 
+        String basePrompt = templateService.getTemplate(type, question);
+
+        return executeWithRetry(basePrompt, type);
     }
 
-    private RespnseStructure executeWithRetry(String basePrompt) {
+    //  Detect question type
+    private String detectType(String question) {
+
+        String q = question.toLowerCase();
+
+        if (q.contains("pattern") || q.contains("singleton") || q.contains("design")) {
+            return "JAVA_THEORY";
+        }
+
+        return "JAVA_PROGRAM";
+    }
+
+    private RespnseStructure executeWithRetry(String basePrompt, String type) {
 
         String prompt = basePrompt;
 
         for (int i = 0; i < 3; i++) {
             try {
 
-                String raw = chatClient
-                        .prompt()
-                        .user(prompt)
-                        .call()
-                        .content();
+                String raw;
+
+                // PRIMARY
+                try {
+                    raw = chatClient
+                            .prompt()
+                            .user(prompt)
+                            .call()
+                            .content();
+                } catch (Exception e) {
+                    log.warn("Primary failed → switching to DeepSeek");
+                    raw = callDeepSeek(prompt);
+                }
 
                 log.info("AI RAW RESPONSE:\n{}", raw);
 
-                // Step 1: Clean
                 raw = cleanResponse(raw);
 
-                // Step 2: Extract JSON if present
+                // JSON CASE
                 if (raw.trim().startsWith("{")) {
 
                     String json = extractJson(raw);
@@ -55,57 +87,53 @@ public class AiServiceImpl implements AiService {
                     RespnseStructure res =
                             objectMapper.readValue(json, RespnseStructure.class);
 
-                    // Step 3: Auto-format code
-                    String formatted = formatJavaCode(res.getContent());
-                    res.setContent(formatted);
+                    String code = extractJavaCode(res.getContent());
+                    res.setContent(code);
 
-                    // Step 4: Validate
-                    validate(res);
+                    validate(res, type);
 
                     return res;
                 }
 
-                // Step 5: Raw Java fallback
-                if (raw.contains("class") && raw.contains("main")) {
+                // RAW JAVA FALLBACK
+                if (raw.contains("class")) {
 
-                    log.warn("Using fallback (raw Java)");
+                    log.warn("Using raw Java fallback");
 
-                    String formatted = formatJavaCode(raw);
+                    String code = extractJavaCode(raw);
 
                     RespnseStructure res = RespnseStructure.builder()
                             .title("Java Program")
-                            .content(formatted)
+                            .content(code)
                             .description("Generated Java program")
                             .createdYear(String.valueOf(Year.now().getValue()))
                             .build();
 
-                    validate(res);
+                    validate(res, type);
 
                     return res;
                 }
 
-                throw new RuntimeException("Invalid AI response format");
+                throw new RuntimeException("Invalid response");
 
             } catch (Exception e) {
 
-                log.error("Retrying... Attempt: {}", (i + 1));
+                log.error("Retrying... Attempt {}", (i + 1));
 
                 prompt = basePrompt + """
 
                         ERROR:
                         Previous response was INVALID.
 
-                        FIX STRICTLY:
-                        - Return ONLY valid JSON
-                        - No markdown
-                        - No explanations
+                        STRICT FIX:
+                        - Return ONLY JSON
+                        - content MUST be pure Java code
+                        - DO NOT include explanations
+                        - DO NOT mix Java + JSON
+                        - DO NOT use markdown
                         - Code must compile
-                        - Use \\n for new lines
-                        - Ensure all braces are closed
-                        - Use System.out.println()
-                        - Include import java.util.Scanner
 
-                        RETURN ONLY JSON
+                        TRY AGAIN.
                         """;
             }
         }
@@ -114,51 +142,53 @@ public class AiServiceImpl implements AiService {
         return RespnseStructure.builder()
                 .title("Error")
                 .content("AI failed to generate valid response")
-                .description("Fallback response after retries")
+                .description("Fallback response")
                 .createdYear(String.valueOf(Year.now().getValue()))
                 .build();
     }
 
-    // Extract JSON safely
+    // BACKUP CALL
+    private String callDeepSeek(String prompt) {
+
+        return deepseekClient.post()
+                .uri("/api/generate")
+                .bodyValue(prompt)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+    }
+
     private String extractJson(String raw) {
         int start = raw.indexOf("{");
         int end = raw.lastIndexOf("}");
-
         if (start == -1 || end == -1) {
             throw new RuntimeException("No JSON found");
         }
-
         return raw.substring(start, end + 1);
     }
 
-    // Clean AI junk
+    private String extractJavaCode(String raw) {
+
+        int start = raw.indexOf("import");
+        int end = raw.lastIndexOf("}");
+
+        if (start != -1 && end != -1) {
+            return raw.substring(start, end + 1).trim();
+        }
+
+        return raw.trim();
+    }
+
     private String cleanResponse(String raw) {
         return raw
                 .replace("```java", "")
                 .replace("```", "")
-                .replace("system.out", "System.out") // auto-fix
+                .replace("system.out", "System.out")
                 .trim();
     }
 
-    // Auto-format Java code
-    private String formatJavaCode(String code) {
-        return code
-                .replace("{", "{\n")
-                .replace("}", "\n}\n")
-                .replace(";", ";\n")
-                .replaceAll("\\n\\s*\\n", "\n")
-                .replaceAll("\\n+", "\n")
-                .trim();
-    }
-
-    // Strong validation
-    private void validate(RespnseStructure res) {
-
-        if (res == null) throw new RuntimeException("Response null");
-
-        if (res.getTitle() == null || res.getTitle().isEmpty()) {
-            throw new RuntimeException("Title missing");
-        }
+    //  SMART VALIDATION
+    private void validate(RespnseStructure res, String type) {
 
         String content = res.getContent();
 
@@ -166,48 +196,44 @@ public class AiServiceImpl implements AiService {
             throw new RuntimeException("Content missing");
         }
 
-        // Format check
-        if (!content.contains("\n")) {
-            throw new RuntimeException("Code not formatted");
+        if (!content.contains("class")) {
+            throw new RuntimeException("No class found");
         }
 
-        // Required elements
-        if (!content.contains("class")) throw new RuntimeException("No class");
-        if (!content.contains("main")) throw new RuntimeException("No main method");
-        if (!content.contains("Scanner")) throw new RuntimeException("No Scanner");
-        if (!content.contains("import java.util.Scanner")) throw new RuntimeException("Missing import");
+        //  PROGRAM TYPE
+        if ("JAVA_PROGRAM".equals(type)) {
 
-        // System.out checks
-        if (!content.contains("System.out")) throw new RuntimeException("System.out missing");
-        if (content.contains("system.out")) throw new RuntimeException("Wrong system.out");
+            if (!content.contains("main")) {
+                throw new RuntimeException("Main missing");
+            }
 
-        // Close scanner
-        if (!content.contains("close()")) {
-            throw new RuntimeException("Scanner not closed");
+            if (!content.contains("Scanner")) {
+                throw new RuntimeException("Scanner missing");
+            }
+
+            if (!content.contains("close()")) {
+                throw new RuntimeException("Scanner not closed");
+            }
         }
 
-        // No explanation allowed
-        if (content.contains("This program") || content.contains("Explanation")) {
-            throw new RuntimeException("Explanation detected");
+        //  THEORY TYPE
+        if ("JAVA_THEORY".equals(type)) {
+
+            if (content.contains("Scanner")) {
+                throw new RuntimeException("Scanner not allowed");
+            }
         }
 
-        // No markdown
-        if (content.contains("```")) {
-            throw new RuntimeException("Markdown not allowed");
+        if (!content.contains("System.out")) {
+            log.warn("System.out not present (allowed)");
         }
 
-        // Braces validation
-        long open = content.chars().filter(ch -> ch == '{').count();
-        long close = content.chars().filter(ch -> ch == '}').count();
-
-        if (open != close) {
-            throw new RuntimeException("Braces mismatch");
+        if (content.contains("system.out")) {
+            throw new RuntimeException("Wrong system.out");
         }
 
-        // Year check
-        if (res.getCreatedYear() == null ||
-                !res.getCreatedYear().matches("\\d{4}")) {
-            throw new RuntimeException("Invalid year");
+        if (!codeValidatorService.isValidJavaCode(content)) {
+            throw new RuntimeException("Compilation failed");
         }
     }
 }

@@ -13,23 +13,18 @@ public class DataLoaderConfig {
     CommandLineRunner loadTemplates(PromptTemplateRepository repository) {
         return args -> {
 
-            String template = """
+            // ================================
+            // JAVA PROGRAM TEMPLATE
+            // ================================
+            String programTemplate = """
                     You are a STRICT backend API.
 
                     You MUST return ONLY valid JSON.
+                    NO markdown.
+                    NO explanations.
+                    NO multiple outputs.
 
-                    DO NOT:
-                    - Add markdown
-                    - Add explanations
-                    - Add multiple responses
-                    - Return any language other than Java
-
-                    STRICT OUTPUT:
-                    - Must start with {
-                    - Must end with }
-                    - No extra text
-
-                    FORMAT:
+                    STRICT JSON FORMAT:
                     {
                       "title": "string",
                       "content": "string",
@@ -37,14 +32,14 @@ public class DataLoaderConfig {
                       "createdYear": "YYYY"
                     }
 
-                    CONTENT RULES (VERY IMPORTANT):
-                    - ONLY Java code
-                    - NO explanations
-                    - NO comments
-                    - Code must END at last }
+                    CRITICAL RULES:
+                    - "content" MUST contain ONLY Java code
+                    - DO NOT write English sentences inside "content"
+                    - DO NOT include comments
+                    - DO NOT include text after closing brace
 
-                    JAVA RULES:
-                    - Must compile
+                    JAVA RULES (MANDATORY):
+                    - Must compile successfully
                     - Must include:
                       import java.util.Scanner;
                       public class
@@ -52,31 +47,76 @@ public class DataLoaderConfig {
                       Scanner usage
                       scanner.close()
 
-                    OUTPUT RULES:
-                    - Use \\n for every new line
-                    - DO NOT return single-line code
-                    - MUST be properly formatted
-                    - Use System.out.println ONLY
-
-                    STRICTLY FORBIDDEN:
-                    - system.out.println
-                    - markdown
-                    - explanations
-                    - multiple outputs
-
-                    ONLY RETURN JSON.
+                    FORBIDDEN:
+                    - "Write a program..."
+                    - "This program..."
+                    - Markdown (```)
+                    - Multiple responses
+                    - Mixing Java + JSON
 
                     QUESTION:
                     {question}
                     """;
 
-            PromptTemplate entity = repository.findByName("JAVA_PROGRAM")
+            // ================================
+            // JAVA THEORY TEMPLATE (NEW)
+            // ================================
+            String theoryTemplate = """
+                    You are a STRICT backend API.
+
+                    You MUST return ONLY valid JSON.
+                    NO markdown.
+                    NO explanations outside JSON.
+
+                    STRICT JSON FORMAT:
+                    {
+                      "title": "string",
+                      "content": "string",
+                      "description": "string",
+                      "createdYear": "YYYY"
+                    }
+
+                    CRITICAL RULES:
+                    - "content" MUST contain ONLY Java code
+                    - DO NOT include explanation inside code
+                    - DO NOT include Scanner
+                    - DO NOT require user input
+                    - Focus on class/design implementation
+
+                    JAVA RULES:
+                    - Must compile
+                    - Must include:
+                      public class
+                    - main method is OPTIONAL
+
+                    FORBIDDEN:
+                    - Markdown (```)
+                    - Multiple responses
+                    - Mixing Java + JSON
+
+                    QUESTION:
+                    {question}
+                    """;
+
+            // ================================
+            // SAVE / UPDATE PROGRAM TEMPLATE
+            // ================================
+            PromptTemplate program = repository.findByName("JAVA_PROGRAM")
                     .orElse(new PromptTemplate());
 
-            entity.setName("JAVA_PROGRAM");
-            entity.setTemplate(template);
+            program.setName("JAVA_PROGRAM");
+            program.setTemplate(programTemplate);
+            repository.save(program);
 
-            repository.save(entity);
+            // ================================
+            // SAVE / UPDATE THEORY TEMPLATE
+            // ================================
+            PromptTemplate theory = repository.findByName("JAVA_THEORY")
+                    .orElse(new PromptTemplate());
+
+            theory.setName("JAVA_THEORY");
+            theory.setTemplate(theoryTemplate);
+            repository.save(theory);
         };
     }
 }
