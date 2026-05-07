@@ -15,8 +15,9 @@ public class PromptTemplateService {
     public String getTemplate(String name, String question) {
 
         PromptTemplate template = repository.findByName(name)
-                .orElseThrow(() -> new RuntimeException("Template not found"));
+                .orElseThrow(() -> new RuntimeException("Template not found: " + name));
 
-        return template.getTemplate().replace("{question}", question);
+        return template.getTemplate()
+                .replace("{question}", question.trim()); // ✅ safe replace
     }
 }
